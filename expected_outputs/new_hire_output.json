@@ -1,0 +1,35 @@
+{
+  "event_id": "evt_001",
+  "event_type": "new_hire",
+  "status": "completed",
+  "processed_at": "2025-01-22T10:30:00Z",
+
+  "actions_taken": [
+    {
+      "integration": "hris",
+      "action": "create_employee",
+      "success": true,
+      "details": "Created employee record for lina.mueller@company.com"
+    },
+    {
+      "integration": "it_tasks",
+      "action": "create_task",
+      "success": true,
+      "details": "Task IT-A1B2C3: Create email and Slack accounts (assigned to: it-team@company.com, due: 2025-01-29)"
+    },
+    {
+      "integration": "it_tasks",
+      "action": "create_task",
+      "success": true,
+      "details": "Task IT-D4E5F6: Order MacBook Pro 14\" + monitor + headset (assigned to: it-team@company.com, due: 2025-01-27)"
+    },
+    {
+      "integration": "it_tasks",
+      "action": "create_task",
+      "success": true,
+      "details": "Task IT-J0K1L2: Schedule Day 1 orientation (assigned to: people@company.com, due: 2025-01-31)"
+    }
+  ],
+
+  "summary": "Onboarding initiated for Lina Müller (Engineering, starting 2025-02-01). Created employee record and 3 onboarding tasks."
+}

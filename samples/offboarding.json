@@ -1,0 +1,7 @@
+{
+  "event_id": "evt_off_001",
+  "type": "offboarding",
+  "employee_email": "lina.mueller@company.com",
+  "last_day": "2025-03-31",
+  "reason": "voluntary_resignation"
+}

@@ -1,0 +1,19 @@
+{
+  "event_id": "evt_001",
+  "type": "new_hire",
+  "employee": {
+    "first_name": "Lina",
+    "last_name": "Müller",
+    "email": "lina.mueller@company.com",
+    "start_date": "2025-02-01",
+    "team": "Engineering",
+    "role": "Software Engineer",
+    "manager": "alex.schmidt@company.com",
+    "location": "Berlin"
+  },
+  "equipment": {
+    "laptop": "MacBook Pro 14\"",
+    "monitor": true,
+    "headset": true
+  }
+}
