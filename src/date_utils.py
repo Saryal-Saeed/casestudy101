@@ -4,6 +4,7 @@ Date utility functions for People Ops Automation.
 Handles working day calculations (Monday-Friday, no weekends).
 """
 
+from datetime import datetime
 from datetime import date, timedelta
 
 
