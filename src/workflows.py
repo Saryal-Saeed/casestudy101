@@ -1,20 +1,13 @@
 """
-Workflow implementations for People Ops Automation.
+Workflows for processing People Ops events (new hire + offboarding).
 
-This module contains the core business logic for processing HR events:
-  - process_new_hire:    Handles onboarding a new employee
-  - process_offboarding: Handles employee departure (bonus)
+I kept each workflow as a standalone function instead of building a class
+hierarchy, since each call is basically fire-and-forget. There is no state to
+carry around between calls. Functions felt simpler.
 
-Design decisions:
-  - Each workflow is a plain function (not a class) because each call is
-    a stateless, one-shot operation.  Functions are simpler and easier to test.
-  - Integration clients are passed as optional parameters so tests can
-    inject shared instances (dependency injection pattern).
-  - Every integration call is wrapped in try/except so a flaky service
-    doesn't crash the entire workflow — we record successes AND failures
-    in the actions_taken list for a clear audit trail.
-  - Idempotency is enforced via metadata keys: before creating a task,
-    we check if one with the same idempotency_key already exists.
+The integration clients (HRIS, IT tasks) are optional params so I can
+inject mocks during testing. Every external call is wrapped in try/except
+so one flaky service can't take down the whole workflow.
 """
 
 from datetime import datetime
@@ -25,9 +18,7 @@ from src.validator import validate_new_hire, validate_offboarding
 from src.date_utils import parse_date, working_days_before
 
 
-# ---------------------------------------------------------------------------
-#  New Hire Workflow
-# ---------------------------------------------------------------------------
+# ---- New Hire Workflow ----
 
 def process_new_hire(
     event: dict,
@@ -37,26 +28,19 @@ def process_new_hire(
     """
     Process a new_hire event end-to-end.
 
-    Steps:
-        1. Validate input fields
-        2. Create the employee record in HRIS
-        3. Create onboarding tasks in the IT system
-        4. Return a structured result
+    Validates input, creates the employee in HRIS, spins up onboarding
+    tasks in the IT system, and returns a structured result dict.
 
     Args:
-        event:    The raw event dictionary loaded from JSON.
-        hris:     Optional HRISClient (pass one in for testing).
-        it_tasks: Optional ITTasksClient (pass one in for testing).
+        event:    Raw event dict from the JSON input.
+        hris:     Optional client to pass for testing.
+        it_tasks: Optional client to pass for testing.
 
     Returns:
-        A result dictionary matching the expected output format.
+        Result dict matching the expected output format.
     """
 
-    # ------------------------------------------------------------------
-    # Step 1 — Validate
-    #   Call our validator. If it returns any errors, stop here and
-    #   return an "error" result instead of crashing.
-    # ------------------------------------------------------------------
+    # Validate first, bail early if something's missing
     errors = validate_new_hire(event)
     if errors:
         return {
@@ -69,12 +53,7 @@ def process_new_hire(
             "summary": f"Validation failed with {len(errors)} error(s).",
         }
 
-    # ------------------------------------------------------------------
-    # Step 2 — Set up integration clients
-    #   If the caller didn't inject clients, create fresh ones.
-    #   This is the "dependency injection" pattern — makes testing easy
-    #   because tests can pass shared clients whose state persists.
-    # ------------------------------------------------------------------
+    # Create clients if caller didn't provide them
     if hris is None:
         hris = HRISClient()
     if it_tasks is None:
@@ -83,14 +62,10 @@ def process_new_hire(
     employee = event["employee"]
     start_date = parse_date(employee["start_date"])
 
-    # This list will accumulate a "receipt" of everything we did.
+    # We'll collect every action we take (successes AND failures) here
     actions_taken = []
 
-    # ------------------------------------------------------------------
-    # Step 3 — Create employee in HRIS
-    #   Wrapped in try/except so a flaky HRIS doesn't kill the workflow.
-    #   We record the outcome either way.
-    # ------------------------------------------------------------------
+    # -- Create employee record in HRIS --
     try:
         hris_result = hris.create_employee(employee)
 
@@ -102,8 +77,7 @@ def process_new_hire(
                 "details": f"Created employee record for {employee['email']}",
             })
         else:
-            # The HRIS returned a business error (e.g. "already exists").
-            # Not a crash — just log it and keep going.
+            # HRIS said no (maybe employee already exists). This is not a crash, just log it
             actions_taken.append({
                 "integration": "hris",
                 "action": "create_employee",
@@ -111,7 +85,7 @@ def process_new_hire(
                 "details": hris_result.error,
             })
     except HRISError as e:
-        # The HRIS service itself blew up (network error, etc.).
+        # actual service blew up (network issue, etc.)
         actions_taken.append({
             "integration": "hris",
             "action": "create_employee",
@@ -119,17 +93,13 @@ def process_new_hire(
             "details": str(e),
         })
 
-    # ------------------------------------------------------------------
-    # Step 4 — Define onboarding tasks
-    #   Each task is a dict with the info we need to create it.
-    #   task_key is used for idempotency (see Step 5).
-    # ------------------------------------------------------------------
-
-    # Build the equipment description from the event's equipment data.
+    # -- Build the list of onboarding tasks --
+    # I'm reading the equipment info from the event so the task description
+    # reflects what was actually requested (e.g. "MacBook Pro 14" + monitor + headset")
     equipment = event.get("equipment", {})
     equipment_parts = []
     if equipment.get("laptop"):
-        # laptop can be a string ("MacBook Pro 14"") or True
+        # laptop value can be a string like "MacBook Pro 14" or just True
         laptop_name = equipment["laptop"] if isinstance(equipment["laptop"], str) else "laptop"
         equipment_parts.append(laptop_name)
     if equipment.get("monitor"):
@@ -165,8 +135,7 @@ def process_new_hire(
         },
     ]
 
-    # --- Nice-to-Have #2: Team-specific tasks ---
-    # Engineering employees also need GitHub access.
+    # Engineering gets an extra GitHub access task
     if employee.get("team") == "Engineering":
         onboarding_tasks.append({
             "title": "Grant GitHub access",
@@ -179,24 +148,19 @@ def process_new_hire(
             "task_key": "github_access",
         })
 
-    # ------------------------------------------------------------------
-    # Step 5 — Create each task in the IT system
-    #   For each task definition:
-    #     a) Check idempotency — does a task with this key already exist?
-    #     b) If not, calculate the due date and create the task.
-    #     c) Wrap in try/except for resilience.
-    # ------------------------------------------------------------------
+    # -- Create each task in the IT system --
+    # For each one we check idempotency first (does a task with this key
+    # already exist?) then calculate the due date and create it.
     task_count = 0
 
     for task_def in onboarding_tasks:
         try:
-            # --- Nice-to-Have #3: Idempotency check ---
-            # Build a unique key from event_id + task_key.
-            # If a task with this key exists, skip creation.
+            # build a unique key so re-running the same event won't create duplicates
             idempotency_key = f"{event['event_id']}_{task_def['task_key']}"
             existing = it_tasks.find_task_by_metadata("idempotency_key", idempotency_key)
 
             if existing:
+                # already done, skip but still count it
                 actions_taken.append({
                     "integration": "it_tasks",
                     "action": "create_task",
@@ -209,14 +173,13 @@ def process_new_hire(
                 task_count += 1
                 continue
 
-            # Calculate due date using our working-day utility.
             due_date = working_days_before(start_date, task_def["due_days_before"])
 
             result = it_tasks.create_task(
                 title=task_def["title"],
                 description=task_def["description"],
                 assignee=task_def["assignee"],
-                due_date=str(due_date),  # date → "2025-01-29"
+                due_date=str(due_date),
                 metadata={
                     "event_id": event["event_id"],
                     "idempotency_key": idempotency_key,
@@ -251,9 +214,7 @@ def process_new_hire(
                 "details": str(e),
             })
 
-    # ------------------------------------------------------------------
-    # Step 6 — Build and return the structured result
-    # ------------------------------------------------------------------
+    # -- Done, return the result --
     return {
         "event_id": event["event_id"],
         "event_type": "new_hire",
@@ -268,9 +229,7 @@ def process_new_hire(
     }
 
 
-# ---------------------------------------------------------------------------
-#  Offboarding Workflow (Bonus)
-# ---------------------------------------------------------------------------
+# ---- Offboarding Workflow ----
 
 def process_offboarding(
     event: dict,
@@ -280,23 +239,20 @@ def process_offboarding(
     """
     Process an offboarding event end-to-end.
 
-    Steps:
-        1. Validate input fields
-        2. Look up the employee in HRIS (fail clearly if not found)
-        3. Update the HRIS record with an end_date
-        4. Create offboarding tasks in the IT system
-        5. Return a structured result
+    Looks up the employee, sets their end_date in HRIS, then creates
+    offboarding tasks (equipment return, access revocation, etc.)
+    with due dates relative to their last day.
 
     Args:
-        event:    The raw event dictionary loaded from JSON.
-        hris:     Optional HRISClient (pass one in for testing).
-        it_tasks: Optional ITTasksClient (pass one in for testing).
+        event:    Raw event dict from JSON.
+        hris:     Optional HRISClient for testing.
+        it_tasks: Optional ITTasksClient for testing.
 
     Returns:
-        A result dictionary matching the expected output format.
+        Result dict in the same shape as the new hire workflow.
     """
 
-    # --- Step 1: Validate ---
+    # validate
     errors = validate_offboarding(event)
     if errors:
         return {
@@ -309,7 +265,6 @@ def process_offboarding(
             "summary": f"Validation failed with {len(errors)} error(s).",
         }
 
-    # --- Step 2: Set up clients ---
     if hris is None:
         hris = HRISClient()
     if it_tasks is None:
@@ -319,8 +274,9 @@ def process_offboarding(
     last_day = parse_date(event["last_day"])
     actions_taken = []
 
-    # --- Step 3: Look up the employee ---
-    # The instructions say "fail clearly if they don't exist".
+    # -- Look up the employee --
+    # Instructions say to "fail clearly if they don't exist", so we return
+    # an error result instead of continuing blindly.
     try:
         lookup = hris.get_employee(employee_email)
 
@@ -354,7 +310,7 @@ def process_offboarding(
             "summary": f"Failed to look up employee: {e}",
         }
 
-    # --- Step 4: Update HRIS record with end_date ---
+    # -- Update HRIS with end_date --
     try:
         update_result = hris.update_employee(
             employee_email, {"end_date": str(last_day)}
@@ -382,8 +338,10 @@ def process_offboarding(
             "details": str(e),
         })
 
-    # --- Step 5: Create offboarding tasks ---
-    # Note the order matters: equipment return first, email/badge last.
+    # -- Offboarding tasks --
+    # Order matters here: equipment return should happen before we cut access.
+    # The "revoke all access" task is due ON the last day (0 working days before).
+    # TODO: could make these configurable per-team instead of hardcoded
     offboarding_tasks = [
         {
             "title": "Schedule equipment return",
@@ -412,7 +370,7 @@ def process_offboarding(
                 f"{employee_data['first_name']} {employee_data['last_name']}"
             ),
             "assignee": "it-team@company.com",
-            "due_days_before": 0,  # Due ON last day
+            "due_days_before": 0,  # due ON last day
             "task_key": "revoke_all_access",
         },
     ]
@@ -421,7 +379,7 @@ def process_offboarding(
 
     for task_def in offboarding_tasks:
         try:
-            # Idempotency check
+            # same idempotency approach as the new hire workflow
             idempotency_key = f"{event['event_id']}_{task_def['task_key']}"
             existing = it_tasks.find_task_by_metadata(
                 "idempotency_key", idempotency_key
@@ -481,7 +439,7 @@ def process_offboarding(
                 "details": str(e),
             })
 
-    # --- Step 6: Build result ---
+    # -- Build and return result --
     full_name = f"{employee_data['first_name']} {employee_data['last_name']}"
     reason = event.get("reason", "not specified")
 

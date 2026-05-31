@@ -1,42 +1,32 @@
 """
-Validator module for People Ops Automation.
+Input validation for People Ops events.
 
-Validates incoming event data before processing workflows.
+Checks that required fields are present before we try to process anything.
 """
 
 
 def validate_new_hire(event: dict):
     """
-    Validate a new_hire event has all required fields.
-
-    Args:
-        event: The raw event dictionary loaded from JSON.
-
-    Returns:
-        A list of error messages. Empty list means the input is valid.
+    Check that a new_hire event has everything we need.
+    Returns a list of error strings (empty = all good).
     """
     errors = []
 
-    # --- Step A: Check top-level required fields ---
-    top_level_fields = ["event_id", "type"]
-
-    for field in top_level_fields:
+    # top-level stuff
+    for field in ["event_id", "type"]:
         if field not in event:
             errors.append(f"Missing required field: '{field}'")
 
-    # --- Step B: Check that 'employee' key exists and is a dict ---
+    # make sure 'employee' exists and is actually a dict
     employee = event.get("employee")
 
     if not isinstance(employee, dict):
         errors.append("Missing or invalid 'employee' object")
-        # If employee is missing entirely, we can't check its sub-fields
-        # so we return early with the errors we have so far
+        # can't check sub-fields if employee itself is missing
         return errors
 
-    # --- Step C: Check required employee sub-fields ---
-    employee_fields = ["first_name", "last_name", "email", "team", "start_date"]
-
-    for field in employee_fields:
+    # required fields inside the employee object
+    for field in ["first_name", "last_name", "email", "team", "start_date"]:
         if field not in employee:
             errors.append(f"Missing required employee field: '{field}'")
 
@@ -45,21 +35,13 @@ def validate_new_hire(event: dict):
 
 def validate_offboarding(event: dict) -> list[str]:
     """
-    Validate an offboarding event has all required fields.
-
-    Args:
-        event: The raw event dictionary loaded from JSON.
-
-    Returns:
-        A list of error messages. Empty list means the input is valid.
+    Check that an offboarding event has everything we need.
+    Returns a list of error strings (empty = all good).
     """
     errors = []
 
-    # Offboarding events have a flat structure (no nested 'employee' object).
-    # Required fields: event_id, type, employee_email, last_day
-    required_fields = ["event_id", "type", "employee_email", "last_day"]
-
-    for field in required_fields:
+    # offboarding events are flat with no nested employee object
+    for field in ["event_id", "type", "employee_email", "last_day"]:
         if field not in event:
             errors.append(f"Missing required field: '{field}'")
 

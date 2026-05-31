@@ -1,8 +1,7 @@
 """
-Command Line Entry Point for People Ops Automation.
+CLI entry point. Reads a JSON event file and routes it to the right workflow.
 
-This script parses command-line arguments, reads an input JSON file,
-routes the event to the appropriate workflow, and prints the result.
+Usage: python -m src.main samples/new_hire.json
 """
 
 import json
@@ -13,7 +12,6 @@ from src.workflows import process_new_hire, process_offboarding
 
 
 def main():
-    # --- Check for arguments ---
     if len(sys.argv) < 2:
         print("Usage: python -m src.main <path_to_json>")
         print("Example: python -m src.main samples/new_hire.json")
@@ -21,7 +19,6 @@ def main():
 
     file_path = Path(sys.argv[1])
 
-    # --- Read the file ---
     if not file_path.exists():
         print(f"Error: File not found -> {file_path}")
         sys.exit(1)
@@ -36,7 +33,7 @@ def main():
         print(f"Error reading file {file_path}: {e}")
         sys.exit(1)
 
-    # --- Route to workflow ---
+    # route to the right workflow based on event type
     event_type = event.get("type")
 
     if event_type == "new_hire":
@@ -44,19 +41,14 @@ def main():
     elif event_type == "offboarding":
         result = process_offboarding(event)
     else:
-        # We don't know how to process this event type
         result = {
             "status": "error",
             "errors": [f"Unknown event type: {event_type}"],
         }
 
-    # --- Print result cleanly ---
-    # ensure_ascii=False ensures names like 'Müller' print correctly
-    # indent=2 makes the output readable for humans
+    # ensure_ascii=False so names like "Müller" print correctly
     print(json.dumps(result, indent=2, ensure_ascii=False))
 
 
-# This magic block ensures main() only runs if you execute this file directly.
-# If another file says `from src.main import main`, it won't run automatically.
 if __name__ == "__main__":
     main()
